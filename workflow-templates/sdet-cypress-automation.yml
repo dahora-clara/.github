@@ -1,0 +1,102 @@
+name: Cypress Automated Tests
+
+on:
+  push:
+    branches: [ develop, preprod, production ]
+  pull_request:
+    branches: [ develop, preprod, production ]
+  workflow_call:
+    inputs:
+      reactApiUrl:
+        description: 'React API Url'
+        default: 'https://api-br.clara-staging.tools'
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on:
+      group: group-runner-alt
+    steps:
+    - name: Clean SonarCloud from other builds
+      run: sudo chown -R $(whoami) .; bash /home/ec2-user/bin/gh_clean_sonarcloud_work
+    - name: Chown user
+      run: |
+        sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+    - uses: actions/checkout@v3
+      with:
+        # Shallow clones should be disabled (better relevancy of Sonar analysis)
+        fetch-depth: 0
+        token: '${{ secrets.PAT_SDET }}'
+        submodules: true
+    - uses: actions/setup-node@v3
+      with:
+        node-version: 16
+    - name: Node version
+      run: node --version
+    - name: Install Yarn
+      run: npm install -g yarn
+    - name: Yarn version
+      run: yarn --version
+    - name: Install
+      run: yarn install
+    - name: Compile
+      run: yarn checkTs
+    - name: Lint
+      run: yarn eslint && yarn lint
+    - name: Prettier
+      run: yarn checkPrettier
+    - name: Test
+      run: yarn test --watchAll=false --passWithNoTests
+    - name: Run app
+      run: yarn install && yarn start &
+      env:
+        REACT_APP_API_URL: ${{ inputs.reactApiUrl }}
+    - name: SonarCloud Scan
+      uses: SonarSource/sonarcloud-github-action@v1.9
+      env:
+        # According to SonarCloud docs, this is needed to get PR information
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Needed to authenticate with SonarCloud, duh
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      with:
+        args: >
+          -Dsonar.organization=clara
+          -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+    - name: SDET Tests
+      run: sudo yum -y install xorg-x11-server-Xvfb gtk2-devel gtk3-devel libnotify-devel GConf2 nss libXScrnSaver alsa-lib
+    - name: Cypress run
+      uses: cypress-io/github-action@v5
+      with:
+        working-directory: ./sdet-automation-qlarity
+        env: TAGS="@dashboard"
+      env:
+        AWS_REGION: '${{ secrets.AWS_REGION_QLARITY }}'
+        AWS_ACCESS_KEY: '${{ secrets.AWS_ACCESS_KEY_QLARITY }}'
+        AWS_SECRET_ACCESS_KEY: '${{ secrets.AWS_SECRET_ACCESS_KEY_QLARITY }}'
+        source: "secrets.template.json"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: allure-results
+        path: ./sdet-automation-qlarity/allure-results
+        retention-days: 20
+    - name: Generate allure report
+      uses: simple-elf/allure-report-action@master
+      if: always()
+      id: allure-report
+      with:
+        allure_results: ./sdet-automation-qlarity/allure-results
+        gh_pages: gh-pages
+        allure_report: ./sdet-automation-qlarity/allure-report
+        allure_history: allure-history
+        keep_reports: 100
+    - name: Deploy report to Github Pages
+      if: always()
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_branch: gh-pages
+        publish_dir: allure-history
+        keep_files: true
