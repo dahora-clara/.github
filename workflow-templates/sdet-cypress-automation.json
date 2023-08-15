@@ -1,0 +1,7 @@
+{
+    "name": "CI Cypress Automated Tests",
+    "description": "SDET automation using Cypress",
+    "filePatterns": [
+        "package.json$"
+    ]
+}
